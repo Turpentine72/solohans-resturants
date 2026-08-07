@@ -138,11 +138,11 @@ export const websiteCheckout = {
   create: (body) => request('/orders/checkout', { method: 'POST', body: JSON.stringify(body) }),
 };
 
-// ─── NEW: payment-method reconciliation (Cash/Transfer/POS/Website) —
-// separate from the original per-menu-item `reconciliation` below ─────────
+// ─── Payment Reconciliation — MONEY ONLY (Cash/POS/Transfer/Website/
+// Glovo/Chowdeck). Separate from the food-only `reconciliation` below. ────
 export const paymentReconciliation = {
   getExpected: () => request('/payment-reconciliation/expected'),
-  closeDay: (actualCounts, notes) => request('/payment-reconciliation/close-day', { method: 'POST', body: JSON.stringify({ actualCounts, notes }) }),
+  closeDay: (actual) => request('/payment-reconciliation/close-day', { method: 'POST', body: JSON.stringify({ actual }) }),
   getHistory: () => request('/payment-reconciliation/history'),
 };
 

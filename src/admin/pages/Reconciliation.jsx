@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { CheckCircle2, AlertTriangle, Lock } from 'lucide-react';
 import { reconciliation as reconciliationApi } from '../../lib/api';
 
 export default function Reconciliation() {
-  const [expected, setExpected] = useState(null);
+  const [expected, setExpected] = useState(null); // { date, items: [{menuItem, name, expectedSold}], isClosed }
   const [actualValues, setActualValues] = useState({});
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -22,15 +22,25 @@ export default function Reconciliation() {
       ]);
       setExpected(exp);
       setHistory(hist);
-      const initial = {};
-      exp.items?.forEach(i => { initial[i.menuItem] = i.remaining; });
-      setActualValues(initial);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
   };
 
+  // Live, automatic comparison — staff only ever types the actual count.
+  const rows = useMemo(() => {
+    if (!expected?.items) return [];
+    return expected.items.map((i) => {
+      const raw = actualValues[i.menuItem];
+      const hasEntry = raw !== undefined && raw !== '';
+      const actualSold = hasEntry ? Number(raw) || 0 : null;
+      const difference = actualSold === null ? null : actualSold - i.expectedSold;
+      const status = difference === null ? null : (difference === 0 ? 'Reconciled' : (difference > 0 ? 'Excess' : 'Shortage'));
+      return { ...i, actualSold, difference, status };
+    });
+  }, [expected, actualValues]);
+
   const handleCloseDay = async () => {
-    if (!window.confirm('Close today and lock stock? This resets all stock counters for tomorrow and cannot be undone.')) return;
+    if (!window.confirm('Close today\'s food reconciliation and lock stock? This resets all meal counters for tomorrow and cannot be undone.')) return;
     setClosing(true);
     try {
       const actualCounts = expected.items.map(i => ({
@@ -47,12 +57,30 @@ export default function Reconciliation() {
     }
   };
 
+  const StatusPill = ({ status }) => {
+    if (status === null) return <span className="text-xs text-gray-400">Awaiting entry</span>;
+    if (status === 'Reconciled') {
+      return (
+        <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">
+          <CheckCircle2 size={13} /> Reconciled Successfully
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700">
+        <AlertTriangle size={13} /> {status}
+      </span>
+    );
+  };
+
   return (
     <>
       <Helmet><title>Day Reconciliation – Solohans Admin</title></Helmet>
       <div>
         <h1 className="text-3xl font-bold text-gray-800 mb-1">Day Reconciliation</h1>
-        <p className="text-gray-500 text-sm mb-6">Count physical stock at close of day and compare against what the system expects.</p>
+        <p className="text-gray-500 text-sm mb-6">
+          Food only — no money here. Expected meals sold per dish are calculated automatically from today's completed orders; just enter the actual portion count.
+        </p>
 
         {loading ? (
           <div className="text-center py-12 text-gray-500">Loading…</div>
@@ -68,26 +96,36 @@ export default function Reconciliation() {
                 <thead className="bg-gray-50 text-gray-500 text-sm">
                   <tr>
                     <th className="py-3 px-4">Dish</th>
-                    <th className="py-3 px-4">Expected (System)</th>
-                    <th className="py-3 px-4">Actual (Physical Count)</th>
+                    <th className="py-3 px-4">Expected Meals Sold</th>
+                    <th className="py-3 px-4">Actual Meals Sold</th>
+                    <th className="py-3 px-4">Difference</th>
+                    <th className="py-3 px-4">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {expected?.items?.map(i => (
-                    <tr key={i.menuItem} className="border-t border-gray-100">
-                      <td className="py-3 px-4 font-medium text-gray-800">{i.name}</td>
-                      <td className="py-3 px-4">{i.remaining}</td>
-                      <td className="py-3 px-4">
-                        <input
-                          type="number"
-                          min="0"
-                          value={actualValues[i.menuItem] ?? 0}
-                          onChange={e => setActualValues({ ...actualValues, [i.menuItem]: e.target.value })}
-                          className="w-24 px-3 py-1.5 border rounded-lg"
-                        />
-                      </td>
-                    </tr>
-                  ))}
+                  {rows.map(r => {
+                    const mismatch = r.status && r.status !== 'Reconciled';
+                    return (
+                      <tr key={r.menuItem} className={`border-t border-gray-100 ${mismatch ? 'bg-red-50/50' : r.status === 'Reconciled' ? 'bg-green-50/40' : ''}`}>
+                        <td className="py-3 px-4 font-medium text-gray-800">{r.name}</td>
+                        <td className="py-3 px-4">{r.expectedSold}</td>
+                        <td className="py-3 px-4">
+                          <input
+                            type="number"
+                            min="0"
+                            value={actualValues[r.menuItem] ?? ''}
+                            onChange={e => setActualValues({ ...actualValues, [r.menuItem]: e.target.value })}
+                            placeholder="0"
+                            className={`w-24 px-3 py-1.5 border rounded-lg ${mismatch ? 'border-red-300' : ''}`}
+                          />
+                        </td>
+                        <td className={`py-3 px-4 font-semibold ${r.difference === null ? 'text-gray-400' : r.difference === 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {r.difference === null ? '—' : `${r.difference >= 0 ? '+' : ''}${r.difference}`}
+                        </td>
+                        <td className="py-3 px-4"><StatusPill status={r.status} /></td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -99,15 +137,18 @@ export default function Reconciliation() {
         )}
 
         {result && (
-          <div className={`mt-6 p-5 rounded-2xl ${result.status === 'Verified' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
+          <div className={`mt-6 p-5 rounded-2xl ${result.status === 'Verified' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
             <div className="flex items-center gap-2 font-bold mb-2">
               {result.status === 'Verified' ? <CheckCircle2 size={20} /> : <AlertTriangle size={20} />}
-              {result.status === 'Verified' ? 'All stock matched — Verified ✔' : 'Differences recorded ❌'}
+              {result.status === 'Verified' ? 'All meals reconciled — Reconciled Successfully' : 'Differences recorded — see below'}
             </div>
             {result.status === 'Mismatch' && (
               <ul className="text-sm space-y-1">
                 {result.items.filter(i => i.difference !== 0).map(i => (
-                  <li key={i.menuItem}>{i.name}: expected {i.expectedStock}, actual {i.actualStock} ({i.difference > 0 ? '+' : ''}{i.difference})</li>
+                  <li key={i.menuItem} className="flex items-center gap-1">
+                    <AlertTriangle size={14} />
+                    {i.name}: expected {i.expectedSold}, actual {i.actualSold} ({i.difference > 0 ? '+' : ''}{i.difference}) — {i.status}
+                  </li>
                 ))}
               </ul>
             )}
@@ -120,15 +161,15 @@ export default function Reconciliation() {
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-x-auto">
               <table className="w-full text-left">
                 <thead className="bg-gray-50 text-gray-500 text-sm">
-                  <tr><th className="py-3 px-4">Date</th><th className="py-3 px-4">Status</th><th className="py-3 px-4">Items</th></tr>
+                  <tr><th className="py-3 px-4">Date</th><th className="py-3 px-4">Status</th><th className="py-3 px-4">Dishes</th></tr>
                 </thead>
                 <tbody>
                   {history.map(r => (
                     <tr key={r._id} className="border-t border-gray-100">
                       <td className="py-3 px-4">{new Date(r.date).toLocaleDateString()}</td>
                       <td className="py-3 px-4">
-                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${r.status === 'Verified' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                          {r.status === 'Verified' ? 'Verified ✔' : 'Mismatch ❌'}
+                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${r.status === 'Verified' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {r.status === 'Verified' ? 'Reconciled Successfully' : 'Discrepancy'}
                         </span>
                       </td>
                       <td className="py-3 px-4">{r.items.length}</td>

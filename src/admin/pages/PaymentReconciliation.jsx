@@ -1,26 +1,28 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Helmet } from 'react-helmet-async';
-import { CheckCircle2, AlertTriangle, Lock, Banknote, ArrowLeftRight, CreditCard, Globe, Bike, Download } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, Lock, Banknote, CreditCard, ArrowLeftRight, Globe, Bike, Download } from 'lucide-react';
 import { paymentReconciliation as reconciliationApi } from '../../lib/api';
 
-const FIELDS = [
-  { key: 'cashTotal', countKey: 'cashCount', label: 'Cash', icon: Banknote, iconColor: 'text-green-600', hint: 'Compare with physical cash' },
-  { key: 'transferTotal', countKey: 'transferCount', label: 'Transfer', icon: ArrowLeftRight, iconColor: 'text-blue-600', hint: 'Compare with bank transfers' },
-  { key: 'posTotal', countKey: 'posCount', label: 'POS', icon: CreditCard, iconColor: 'text-purple-600', hint: 'Compare with POS account' },
-  { key: 'websitePaymentTotal', countKey: 'websitePaymentCount', label: 'Website Payment', icon: Globe, iconColor: 'text-teal-600', hint: 'Compare with Paystack dashboard' },
-];
+// The 6 payment methods this page reconciles — MONEY ONLY. Nothing about
+// food/meals lives here; that's the separate Day Reconciliation page.
+const METHOD_META = {
+  cash: { icon: Banknote, iconColor: 'text-green-600' },
+  pos: { icon: CreditCard, iconColor: 'text-purple-600' },
+  transfer: { icon: ArrowLeftRight, iconColor: 'text-blue-600' },
+  website: { icon: Globe, iconColor: 'text-teal-600' },
+  glovo: { icon: Bike, iconColor: 'text-indigo-600' },
+  chowdeck: { icon: Bike, iconColor: 'text-orange-600' },
+};
+
+const naira = (n) => `₦${(Number(n) || 0).toLocaleString()}`;
 
 export default function PaymentReconciliation() {
-  const [expected, setExpected] = useState(null);
-  const [actual, setActual] = useState({ cashTotal: '', transferTotal: '', posTotal: '', websitePaymentTotal: '' });
-  const [platformActuals, setPlatformActuals] = useState({}); // { Glovo: '5000', Chowdeck: '3200', ... }
-  const [notes, setNotes] = useState({}); // keyed by channel: 'cashTotal', 'transferTotal', ..., 'Glovo', 'Chowdeck', ...
+  const [expected, setExpected] = useState(null); // { date, methods: [{key,label,count,expected}], totalExpected, isClosed, closedRecord }
+  const [actual, setActual] = useState({}); // { cash: '', pos: '', transfer: '', website: '', glovo: '', chowdeck: '' }
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [closing, setClosing] = useState(false);
   const [result, setResult] = useState(null);
-
-  const platformKeys = Object.keys(expected?.platformBreakdown || {});
 
   useEffect(() => { fetchData(); }, []);
 
@@ -37,40 +39,32 @@ export default function PaymentReconciliation() {
     finally { setLoading(false); }
   };
 
-  const handleCloseDay = async () => {
-    // ✅ Error Detection — any channel where actual ≠ expected MUST have a
-    // note explaining it before the day can be closed. This is enforced
-    // here (not just visually) so a shortage/excess can never be silently
-    // submitted without an explanation.
-    const problems = [];
-    FIELDS.forEach((f) => {
-      const exp = expected?.expected?.[f.key] || 0;
-      const act = Number(actual[f.key]) || 0;
-      if (act !== exp && !notes[f.key]?.trim()) problems.push(f.label);
+  // Everything below is calculated automatically — staff never does any
+  // math themselves. Live rows recompute on every keystroke.
+  const rows = useMemo(() => {
+    if (!expected) return [];
+    return expected.methods.map((m) => {
+      const raw = actual[m.key];
+      const hasEntry = raw !== undefined && raw !== '';
+      const act = hasEntry ? Number(raw) || 0 : null;
+      const difference = act === null ? null : act - m.expected;
+      const status = difference === null ? null : (difference === 0 ? 'Reconciled' : (difference > 0 ? 'Excess' : 'Shortage'));
+      return { ...m, actual: act, difference, status };
     });
-    platformKeys.forEach((platform) => {
-      const exp = expected.platformBreakdown[platform]?.total || 0;
-      const act = Number(platformActuals[platform]) || 0;
-      if (act !== exp && !notes[platform]?.trim()) problems.push(platform);
-    });
-    if (problems.length > 0) {
-      alert(`Add a note explaining the shortage/excess for: ${problems.join(', ')}. A reason is required before closing the day whenever the actual amount doesn't match what the system expects.`);
-      return;
-    }
+  }, [expected, actual]);
 
-    if (!window.confirm('Close today\'s reconciliation? This cannot be undone.')) return;
+  const totalExpected = expected?.totalExpected || 0;
+  const totalActual = rows.reduce((s, r) => s + (r.actual || 0), 0);
+  const totalDifference = totalActual - totalExpected;
+
+  const handleCloseDay = async () => {
+    if (!window.confirm("Close today's payment reconciliation? This cannot be undone.")) return;
     setClosing(true);
     try {
-      const actualCounts = {
-        cashTotal: Number(actual.cashTotal) || 0,
-        transferTotal: Number(actual.transferTotal) || 0,
-        posTotal: Number(actual.posTotal) || 0,
-        websitePaymentTotal: Number(actual.websitePaymentTotal) || 0,
-        platformBreakdown: Object.fromEntries(
-          platformKeys.map((p) => [p, Number(platformActuals[p]) || 0])
-        ),
-      };
-      const res = await reconciliationApi.closeDay(actualCounts, notes);
+      const actualPayload = Object.fromEntries(
+        Object.keys(METHOD_META).map((key) => [key, Number(actual[key]) || 0])
+      );
+      const res = await reconciliationApi.closeDay(actualPayload);
       setResult(res);
       fetchData();
     } catch (err) {
@@ -81,17 +75,13 @@ export default function PaymentReconciliation() {
   };
 
   const handleExportCSV = () => {
-    const rows = [['Date', 'Payment Method', 'Expected', 'Actual', 'Difference', 'Status', 'Staff', 'Notes']];
+    const rowsCsv = [['Date', 'Payment Method', 'Expected', 'Actual', 'Difference', 'Status', 'Closed By']];
     history.forEach((r) => {
-      FIELDS.forEach((f) => {
-        const exp = r.expected[f.key]; const act = r.actual[f.key]; const diff = r.variance[f.key];
-        rows.push([r.date, f.label, exp, act, diff, diff === 0 ? 'Balanced' : (diff > 0 ? 'Excess' : 'Shortage'), r.closedBy || '', r.notes?.[f.key] || '']);
-      });
-      Object.entries(r.platformBreakdown || {}).forEach(([platform, v]) => {
-        rows.push([r.date, platform, v.expected, v.actual, v.variance, v.variance === 0 ? 'Balanced' : (v.variance > 0 ? 'Excess' : 'Shortage'), r.closedBy || '', r.notes?.[platform] || '']);
+      (r.methods || []).forEach((m) => {
+        rowsCsv.push([r.date, m.label, m.expected, m.actual, m.difference, m.status, r.closedBy || '']);
       });
     });
-    const csv = rows.map((row) => row.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const csv = rowsCsv.map((row) => row.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -101,27 +91,51 @@ export default function PaymentReconciliation() {
     URL.revokeObjectURL(url);
   };
 
+  const StatusPill = ({ status }) => {
+    if (status === null) return <span className="text-xs text-gray-400">Awaiting entry</span>;
+    if (status === 'Reconciled') {
+      return (
+        <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">
+          <CheckCircle2 size={13} /> Reconciled Successfully
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700">
+        <AlertTriangle size={13} /> {status}
+      </span>
+    );
+  };
+
   return (
     <>
-      <Helmet><title>Day Reconciliation – Solohans Admin</title></Helmet>
+      <Helmet><title>Payment Reconciliation – Solohans Admin</title></Helmet>
       <div>
-        <h1 className="text-3xl font-bold text-gray-800 mb-1">Day Reconciliation</h1>
-        <p className="text-gray-500 text-sm mb-6">Compare what the system expects from today's paid orders (Website + Store, by payment method) against physical counts.</p>
+        <h1 className="text-3xl font-bold text-gray-800 mb-1">Payment Reconciliation</h1>
+        <p className="text-gray-500 text-sm mb-6">
+          Money only. Expected amounts are calculated automatically from today's completed orders — just enter what was actually counted for each payment method.
+        </p>
 
         {loading ? (
           <div className="text-center py-12 text-gray-500">Loading…</div>
         ) : expected?.isClosed ? (
           <div className="bg-gray-100 rounded-2xl p-8 text-center text-gray-600">
             <Lock size={32} className="mx-auto mb-3" />
-            <p className="font-medium">Today has already been reconciled and closed.</p>
+            <p className="font-medium">Today's payment reconciliation has already been closed.</p>
             {expected.closedRecord && (
-              <div className="mt-4 text-sm text-left max-w-md mx-auto space-y-1">
-                {FIELDS.map((f) => (
-                  <p key={f.key}>{f.label} ({expected.closedRecord.expected[f.countKey] || 0} txns): expected ₦{expected.closedRecord.expected[f.key].toLocaleString()}, actual ₦{expected.closedRecord.actual[f.key].toLocaleString()} (variance {expected.closedRecord.variance[f.key] >= 0 ? '+' : ''}₦{expected.closedRecord.variance[f.key].toLocaleString()}){expected.closedRecord.notes?.[f.key] ? ` — ${expected.closedRecord.notes[f.key]}` : ''}</p>
+              <div className="mt-5 text-sm text-left max-w-lg mx-auto space-y-2">
+                {expected.closedRecord.methods.map((m) => (
+                  <div key={m.key} className="flex items-center justify-between border-b border-gray-200 pb-1">
+                    <span>{m.label}</span>
+                    <span className="text-gray-500">Expected {naira(m.expected)} · Actual {naira(m.actual)}</span>
+                    <StatusPill status={m.status} />
+                  </div>
                 ))}
-                {Object.entries(expected.closedRecord.platformBreakdown || {}).map(([platform, v]) => (
-                  <p key={platform}>{platform} ({v.count || 0} txns): expected ₦{v.expected.toLocaleString()}, actual ₦{v.actual.toLocaleString()} (variance {v.variance >= 0 ? '+' : ''}₦{v.variance.toLocaleString()}){expected.closedRecord.notes?.[platform] ? ` — ${expected.closedRecord.notes[platform]}` : ''}</p>
-                ))}
+                <div className="flex items-center justify-between pt-2 font-semibold">
+                  <span>Total</span>
+                  <span>Expected {naira(expected.closedRecord.totalExpected)} · Actual {naira(expected.closedRecord.totalActual)}</span>
+                  <StatusPill status={expected.closedRecord.overallStatus} />
+                </div>
               </div>
             )}
           </div>
@@ -133,102 +147,49 @@ export default function PaymentReconciliation() {
                   <tr>
                     <th className="py-3 px-4">Payment Method</th>
                     <th className="py-3 px-4">Transactions</th>
-                    <th className="py-3 px-4">Expected (System)</th>
-                    <th className="py-3 px-4">Actual (Physical / Account Count)</th>
-                    <th className="py-3 px-4">Notes</th>
-                    <th className="py-3 px-4">Compare With</th>
+                    <th className="py-3 px-4">Expected Amount</th>
+                    <th className="py-3 px-4">Actual Amount</th>
+                    <th className="py-3 px-4">Difference</th>
+                    <th className="py-3 px-4">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {FIELDS.map((f) => {
-                    const exp = expected?.expected?.[f.key] || 0;
-                    const act = actual[f.key] === '' ? null : Number(actual[f.key]) || 0;
-                    const mismatch = act !== null && act !== exp;
-                    const needsNote = mismatch && !notes[f.key]?.trim();
+                  {rows.map((r) => {
+                    const meta = METHOD_META[r.key];
+                    const mismatch = r.status && r.status !== 'Reconciled';
                     return (
-                      <tr key={f.key} className={`border-t border-gray-100 ${mismatch ? 'bg-red-50/50' : ''}`}>
-                        <td className="py-3 px-4 font-medium text-gray-800 flex items-center gap-2"><f.icon size={16} className={f.iconColor} /> {f.label}</td>
-                        <td className="py-3 px-4 text-gray-500">{expected?.expected?.[f.countKey] || 0}</td>
-                        <td className="py-3 px-4">₦{exp.toLocaleString()}</td>
+                      <tr key={r.key} className={`border-t border-gray-100 ${mismatch ? 'bg-red-50/50' : r.status === 'Reconciled' ? 'bg-green-50/40' : ''}`}>
+                        <td className="py-3 px-4 font-medium text-gray-800 flex items-center gap-2">
+                          <meta.icon size={16} className={meta.iconColor} /> {r.label}
+                        </td>
+                        <td className="py-3 px-4 text-gray-500">{r.count}</td>
+                        <td className="py-3 px-4 font-medium">{naira(r.expected)}</td>
                         <td className="py-3 px-4">
                           <input
                             type="number"
                             min="0"
-                            value={actual[f.key]}
-                            onChange={(e) => setActual({ ...actual, [f.key]: e.target.value })}
+                            value={actual[r.key] ?? ''}
+                            onChange={(e) => setActual({ ...actual, [r.key]: e.target.value })}
                             placeholder="0"
                             className={`w-32 px-3 py-1.5 border rounded-lg ${mismatch ? 'border-red-300' : ''}`}
                           />
-                          {mismatch && (
-                            <p className="flex items-center gap-1 text-xs text-red-600 mt-1">
-                              <AlertTriangle size={12} /> {act > exp ? 'Excess' : 'Shortage'}: ₦{Math.abs(act - exp).toLocaleString()}
-                            </p>
-                          )}
                         </td>
-                        <td className="py-3 px-4">
-                          <input
-                            type="text"
-                            value={notes[f.key] || ''}
-                            onChange={(e) => setNotes({ ...notes, [f.key]: e.target.value })}
-                            placeholder={mismatch ? 'Required — explain the variance' : 'Optional'}
-                            className={`w-40 px-3 py-1.5 border rounded-lg text-sm ${needsNote ? 'border-red-400 bg-red-50' : ''}`}
-                          />
+                        <td className={`py-3 px-4 font-semibold ${r.difference === null ? 'text-gray-400' : r.difference === 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {r.difference === null ? '—' : `${r.difference >= 0 ? '+' : ''}${naira(r.difference)}`}
                         </td>
-                        <td className="py-3 px-4 text-xs text-gray-400">{f.hint}</td>
-                      </tr>
-                    );
-                  })}
-                  {/* ✅ Third-party delivery platforms — Glovo, Chowdeck, Uber Eats,
-                      and Other are ALWAYS shown here, even at ₦0 / 0 transactions,
-                      so a platform never disappears from view just because it had
-                      no sales yet today. Anything added to RECONCILABLE_PLATFORMS
-                      on the backend shows up here automatically — no frontend
-                      change needed. "Actual" here is what the platform's own
-                      dashboard/settlement statement shows, so this catches a
-                      platform under/over-paying versus what was rung up at POS. */}
-                  {platformKeys.map((platform) => {
-                    const exp = expected.platformBreakdown[platform]?.total || 0;
-                    const act = !platformActuals[platform] ? null : Number(platformActuals[platform]) || 0;
-                    const mismatch = act !== null && act !== exp;
-                    const needsNote = mismatch && !notes[platform]?.trim();
-                    return (
-                      <tr key={platform} className={`border-t border-gray-100 ${mismatch ? 'bg-red-50/50' : 'bg-indigo-50/40'}`}>
-                        <td className="py-3 px-4 font-medium text-gray-800 flex items-center gap-2"><Bike size={16} className="text-indigo-600" /> {platform}</td>
-                        <td className="py-3 px-4 text-gray-500">{expected.platformBreakdown[platform]?.count || 0}</td>
-                        <td className="py-3 px-4">₦{exp.toLocaleString()}</td>
-                        <td className="py-3 px-4">
-                          <input
-                            type="number"
-                            min="0"
-                            value={platformActuals[platform] || ''}
-                            onChange={(e) => setPlatformActuals({ ...platformActuals, [platform]: e.target.value })}
-                            placeholder="0"
-                            className={`w-32 px-3 py-1.5 border rounded-lg ${mismatch ? 'border-red-300' : ''}`}
-                          />
-                          {mismatch && (
-                            <p className="flex items-center gap-1 text-xs text-red-600 mt-1">
-                              <AlertTriangle size={12} /> {act > exp ? 'Excess' : 'Shortage'}: ₦{Math.abs(act - exp).toLocaleString()}
-                            </p>
-                          )}
-                        </td>
-                        <td className="py-3 px-4">
-                          <input
-                            type="text"
-                            value={notes[platform] || ''}
-                            onChange={(e) => setNotes({ ...notes, [platform]: e.target.value })}
-                            placeholder={mismatch ? 'Required — explain the variance' : 'Optional'}
-                            className={`w-40 px-3 py-1.5 border rounded-lg text-sm ${needsNote ? 'border-red-400 bg-red-50' : ''}`}
-                          />
-                        </td>
-                        <td className="py-3 px-4 text-xs text-gray-400">Compare with {platform} statement/dashboard</td>
+                        <td className="py-3 px-4"><StatusPill status={r.status} /></td>
                       </tr>
                     );
                   })}
                   <tr className="border-t border-gray-200 bg-gray-50 font-semibold">
-                    <td className="py-3 px-4">Total Sales</td>
-                    <td colSpan="1"></td>
-                    <td className="py-3 px-4">₦{(expected?.expected?.totalSales || 0).toLocaleString()}</td>
-                    <td colSpan="3"></td>
+                    <td className="py-3 px-4">Total</td>
+                    <td></td>
+                    <td className="py-3 px-4">{naira(totalExpected)}</td>
+                    <td className="py-3 px-4">{naira(totalActual)}</td>
+                    <td className={`py-3 px-4 ${totalDifference === 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {totalDifference >= 0 ? '+' : ''}{naira(totalDifference)}
+                    </td>
+                    <td></td>
                   </tr>
                 </tbody>
               </table>
@@ -241,21 +202,16 @@ export default function PaymentReconciliation() {
         )}
 
         {result && (
-          <div className="mt-6 p-5 rounded-2xl bg-green-50 text-green-700">
+          <div className={`mt-6 p-5 rounded-2xl ${result.overallStatus === 'Reconciled' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
             <div className="flex items-center gap-2 font-bold mb-2">
-              <CheckCircle2 size={20} /> Day closed
+              {result.overallStatus === 'Reconciled' ? <CheckCircle2 size={20} /> : <AlertTriangle size={20} />}
+              {result.overallStatus === 'Reconciled' ? 'Payment Reconciliation — Reconciled Successfully' : `Payment Reconciliation — ${result.overallStatus} of ${naira(Math.abs(result.totalDifference))}`}
             </div>
             <ul className="text-sm space-y-1">
-              {FIELDS.map((f) => (
-                <li key={f.key} className={result.variance[f.key] !== 0 ? 'text-amber-700 flex items-center gap-1' : ''}>
-                  {result.variance[f.key] !== 0 && <AlertTriangle size={14} />}
-                  {f.label}: expected ₦{result.expected[f.key].toLocaleString()}, actual ₦{result.actual[f.key].toLocaleString()} ({result.variance[f.key] >= 0 ? '+' : ''}₦{result.variance[f.key].toLocaleString()}){result.notes?.[f.key] ? ` — ${result.notes[f.key]}` : ''}
-                </li>
-              ))}
-              {Object.entries(result.platformBreakdown || {}).map(([platform, v]) => (
-                <li key={platform} className={v.variance !== 0 ? 'text-amber-700 flex items-center gap-1' : ''}>
-                  {v.variance !== 0 && <AlertTriangle size={14} />}
-                  {platform}: expected ₦{v.expected.toLocaleString()}, actual ₦{v.actual.toLocaleString()} ({v.variance >= 0 ? '+' : ''}₦{v.variance.toLocaleString()}){result.notes?.[platform] ? ` — ${result.notes[platform]}` : ''}
+              {result.methods.map((m) => (
+                <li key={m.key} className={m.status !== 'Reconciled' ? 'flex items-center gap-1' : ''}>
+                  {m.status !== 'Reconciled' && <AlertTriangle size={14} />}
+                  {m.label}: expected {naira(m.expected)}, actual {naira(m.actual)} ({m.difference >= 0 ? '+' : ''}{naira(m.difference)}) — {m.status}
                 </li>
               ))}
             </ul>
@@ -273,27 +229,17 @@ export default function PaymentReconciliation() {
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-x-auto">
               <table className="w-full text-left">
                 <thead className="bg-gray-50 text-gray-500 text-sm">
-                  <tr><th className="py-3 px-4">Date</th><th className="py-3 px-4">Expected</th><th className="py-3 px-4">Actual</th><th className="py-3 px-4">Variance</th></tr>
+                  <tr><th className="py-3 px-4">Date</th><th className="py-3 px-4">Expected</th><th className="py-3 px-4">Actual</th><th className="py-3 px-4">Status</th></tr>
                 </thead>
                 <tbody>
-                  {history.map((r) => {
-                    const platformEntries = Object.values(r.platformBreakdown || {});
-                    const totalExpected = FIELDS.reduce((s, f) => s + r.expected[f.key], 0) + platformEntries.reduce((s, v) => s + (v.expected || 0), 0);
-                    const totalActual = FIELDS.reduce((s, f) => s + r.actual[f.key], 0) + platformEntries.reduce((s, v) => s + (v.actual || 0), 0);
-                    const totalVariance = FIELDS.reduce((s, f) => s + (r.variance[f.key] || 0), 0) + platformEntries.reduce((s, v) => s + (v.variance || 0), 0);
-                    return (
-                      <tr key={r._id} className="border-t border-gray-100">
-                        <td className="py-3 px-4">{r.date}</td>
-                        <td className="py-3 px-4">₦{totalExpected.toLocaleString()}</td>
-                        <td className="py-3 px-4">₦{totalActual.toLocaleString()}</td>
-                        <td className="py-3 px-4">
-                          <span className={`px-3 py-1 rounded-full text-xs font-medium ${totalVariance === 0 ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                            {totalVariance === 0 ? <><CheckCircle2 size={12} className="inline mr-1" />Matched</> : `${totalVariance >= 0 ? '+' : ''}₦${totalVariance.toLocaleString()}`}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {history.map((r) => (
+                    <tr key={r._id} className="border-t border-gray-100">
+                      <td className="py-3 px-4">{r.date}</td>
+                      <td className="py-3 px-4">{naira(r.totalExpected)}</td>
+                      <td className="py-3 px-4">{naira(r.totalActual)}</td>
+                      <td className="py-3 px-4"><StatusPill status={r.overallStatus} /></td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

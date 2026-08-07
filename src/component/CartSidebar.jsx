@@ -13,9 +13,18 @@ import cardimg from '../assets/images.png';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
 
+// Cart items normally already store price as a clean number (CartContext
+// parses it on addToCart), but this guards against a stray string slipping
+// through so the WhatsApp message math never breaks.
+const parsePriceValue = (val) => {
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') return parseFloat(val.replace(/[₦,]/g, '')) || 0;
+  return 0;
+};
+
 export default function CartSidebar() {
   const {
-    cartItems, isOpen, checkoutMode, closeCart, removeFromCart,
+    cartItems, isOpen, checkoutMode, openCart, closeCart, removeFromCart,
     increaseQuantity, decreaseQuantity, subtotal, itemCount, clearCart,
   } = useCart();
 
@@ -266,13 +275,35 @@ export default function CartSidebar() {
     }
   };
 
+  // ✅ Business WhatsApp number comes from Settings (admin-configured, stored
+  // in the database) — never hardcoded. Normalized to bare digits with
+  // country code, e.g. "2348081941298", exactly what wa.me expects.
+  const resolveWhatsAppNumber = () => {
+    const raw = settings?.whatsapp || '';
+    const digits = raw.replace(/[^\d]/g, '');
+    if (!digits) return null;
+    // If a local Nigerian number was entered without the country code
+    // (e.g. "08081941298"), convert the leading 0 to 234 so the link is
+    // always valid regardless of how the admin typed it into Settings.
+    if (digits.startsWith('0')) return `234${digits.slice(1)}`;
+    return digits;
+  };
+
   // 🟢 WhatsApp ordering: cart is still the mandatory checkpoint — the order
   // is created in the database FIRST (so admin sees it, it has a real
   // Order ID, and it's trackable), THEN WhatsApp opens with that order's
   // details pre-filled. Payment is handled manually by admin afterward.
+  // This is a completely separate path from handlePaystackPayment (the
+  // online/email flow) — it never calls it and never sends any email.
   const handleWhatsAppOrder = async () => {
     const error = validateForm();
     if (error) { setFormErrors(error); return; }
+
+    const whatsappNumber = resolveWhatsAppNumber();
+    if (!whatsappNumber) {
+      setFormErrors("Sorry, WhatsApp ordering isn't available right now — the business WhatsApp number hasn't been configured. Please try Pay Online instead.");
+      return;
+    }
     setFormErrors('');
 
     setProcessing(true);
@@ -288,35 +319,37 @@ export default function CartSidebar() {
       const grandTotal = payNowAmount; // items (with tax) + delivery fee, if known yet
 
       const lines = [
-        `*ORDER SUMMARY*`,
+        `Hello, I would like to place an order.`,
         ``,
         `Order ID: ${newOrder.order_id}`,
         ``,
-        `Customer:`,
-        `Name: ${form.name}`,
-        `Phone: ${form.phone}`,
-        `Address: ${deliveryMethod === 'pickup' ? 'Pickup at restaurant' : form.address}`,
-        ``,
-        `Products:`,
-        ...cartItems.map(item => `• ${item.name} ×${item.quantity}`),
-        ...freeItems.map(free => `• ${free.name} (FREE)`),
+        `Order Details`,
+        ...cartItems.map(item => {
+          const price = parsePriceValue(item.price);
+          return `• ${item.name} × ${item.quantity} — ₦${(price * item.quantity).toLocaleString()}`;
+        }),
+        ...freeItems.map(free => `• ${free.name} × 1 — FREE`),
         ``,
         `Subtotal: ₦${subtotal.toLocaleString()}`,
         discountAmount > 0 ? `Discount: -₦${Math.round(discountAmount).toLocaleString()}` : null,
-        `Delivery Fee: ${deliveryFeeLine}`,
         taxEnabled && taxAmount > 0 ? `Tax: ₦${taxAmount.toLocaleString()}` : null,
-        `TOTAL: ₦${grandTotal.toLocaleString()}${deliveryMethod === 'delivery' && !selectedZone ? ' (+ delivery fee, TBC by admin)' : ''}`,
+        `Delivery: ${deliveryFeeLine}`,
+        `Total: ₦${grandTotal.toLocaleString()}${deliveryMethod === 'delivery' && !selectedZone ? ' (+ delivery fee, TBC by admin)' : ''}`,
         ``,
-        `Payment Status: UNPAID`,
+        `Customer Name: ${form.name}`,
+        `Phone: ${form.phone}`,
+        `Delivery Address: ${deliveryMethod === 'pickup' ? 'Pickup at restaurant' : form.address}`,
       ].filter(line => line !== null);
 
-      if (notes.trim()) lines.push(``, `Note: ${notes.trim()}`);
+      if (notes.trim()) lines.push(`Note: ${notes.trim()}`);
 
-      lines.push(``, `Track Order:`, `${window.location.origin}/track/${newOrder.order_id}`);
-      lines.push(``, `Receipt:`, `${window.location.origin}/receipt/${newOrder._id}`);
+      lines.push(``, `Order Method: WhatsApp`, `Payment Status: UNPAID`);
+      lines.push(``, `Track Order: ${window.location.origin}/track/${newOrder.order_id}`);
+      lines.push(``, `Please confirm my order. Thank you.`);
 
+      // URL-encode the full message so line breaks, ₦, and every other
+      // special character survive the wa.me link intact.
       const message = encodeURIComponent(lines.join('\n'));
-      const whatsappNumber = (settings?.whatsapp || '+234 808 194 1298').replace(/[^\d]/g, '');
 
       window.open(`https://wa.me/${whatsappNumber}?text=${message}`, '_blank');
 
@@ -670,7 +703,27 @@ export default function CartSidebar() {
         {step === 'cart' && cartItems.length > 0 && (
           <div className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t">
             <div className="flex items-center justify-between mb-2"><span>{itemCount} items</span><span className="font-bold text-[#C62828]">₦{discountedSubtotal.toLocaleString()}</span></div>
-            <button onClick={() => setStep('checkout')} className="w-full py-3 bg-[#C62828] text-white rounded-full font-semibold hover:bg-[#B71C1C]">Checkout</button>
+            {/* ✅ The cart's own Checkout button ALWAYS goes to the WhatsApp
+                order flow — this is the fix for the bug where it was
+                silently falling through to the online/email flow because
+                checkoutMode defaulted to 'online' and nothing here ever
+                set it. openCart('whatsapp') forces the mode explicitly
+                before moving to the checkout step, so
+                `checkoutMode === 'whatsapp'` is guaranteed true and
+                handleWhatsAppOrder (never handlePaystackPayment/email) is
+                what fires. */}
+            <button
+              onClick={() => { openCart('whatsapp'); setStep('checkout'); }}
+              className="w-full py-3 bg-[#25D366] text-white rounded-full font-semibold hover:bg-[#1ebe57] flex items-center justify-center gap-2"
+            >
+              <MessageCircle size={18} /> Order via WhatsApp
+            </button>
+            <button
+              onClick={() => { openCart('online'); setStep('checkout'); }}
+              className="w-full mt-2 py-2 text-sm font-medium text-gray-500 hover:text-[#C62828] underline"
+            >
+              Prefer to pay online instead?
+            </button>
           </div>
         )}
       </div>

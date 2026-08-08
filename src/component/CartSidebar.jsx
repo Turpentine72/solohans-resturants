@@ -59,6 +59,14 @@ export default function CartSidebar() {
   };
   const [processing, setProcessing] = useState(false);
 
+  // ✅ Daily Dish Stock — true if any cart line exceeds today's known
+  // remaining stock for that dish. Only ever true for dishes explicitly
+  // opted into daily tracking (item.remaining is undefined for everything
+  // else, so this is always false for them).
+  const cartStockExceeded = cartItems.some(
+    item => item.trackDailyStock && typeof item.remaining === 'number' && item.quantity > item.remaining
+  );
+
   // ─── Promo calculations ─────────────────────────────────────────────────
   let discountAmount = 0;
   let freeDelivery = false;
@@ -405,7 +413,14 @@ export default function CartSidebar() {
             ) : (
               <>
                 <div className="space-y-4">
-                  {cartItems.map(item => (
+                  {cartItems.map(item => {
+                    // ✅ Daily Dish Stock — soft, early warning only (the
+                    // real, authoritative block happens server-side on
+                    // order creation). Only applies to dishes explicitly
+                    // opted into daily tracking; every other item is
+                    // unaffected since `remaining` is undefined for them.
+                    const stockExceeded = item.trackDailyStock && typeof item.remaining === 'number' && item.quantity > item.remaining;
+                    return (
                     <div key={item.id} className="flex items-center gap-4 bg-[#FFF8F0] p-3 rounded-xl">
                       <img src={item.image} alt={item.name} className="w-16 h-16 rounded-lg object-cover" />
                       <div className="flex-1 min-w-0">
@@ -417,10 +432,21 @@ export default function CartSidebar() {
                           <button onClick={() => increaseQuantity(item.id)} className="w-7 h-7 rounded-full border flex items-center justify-center hover:bg-gray-100"><Plus size={14} /></button>
                           <button onClick={() => removeFromCart(item.id)} className="ml-auto text-gray-400 hover:text-[#C62828]"><Trash2 size={18} /></button>
                         </div>
+                        {stockExceeded && (
+                          <p className="text-xs text-red-600 font-medium mt-1">
+                            {item.remaining === 0 ? 'Sold out for today' : `Only ${item.remaining} left today`} — please reduce the quantity.
+                          </p>
+                        )}
                       </div>
                     </div>
-                  ))}
+                  );})}
                 </div>
+
+                {cartStockExceeded && (
+                  <div className="mt-3 bg-red-50 border border-red-100 text-red-700 text-sm rounded-xl p-3">
+                    Some items in your cart exceed today's available stock. Please adjust quantities before checking out.
+                  </div>
+                )}
 
                 {freeItems.length > 0 && (
                   <div className="mt-4 border-t pt-4">
@@ -714,13 +740,15 @@ export default function CartSidebar() {
                 what fires. */}
             <button
               onClick={() => { openCart('whatsapp'); setStep('checkout'); }}
-              className="w-full py-3 bg-[#25D366] text-white rounded-full font-semibold hover:bg-[#1ebe57] flex items-center justify-center gap-2"
+              disabled={cartStockExceeded}
+              className="w-full py-3 bg-[#25D366] text-white rounded-full font-semibold hover:bg-[#1ebe57] flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <MessageCircle size={18} /> Order via WhatsApp
             </button>
             <button
               onClick={() => { openCart('online'); setStep('checkout'); }}
-              className="w-full mt-2 py-2 text-sm font-medium text-gray-500 hover:text-[#C62828] underline"
+              disabled={cartStockExceeded}
+              className="w-full mt-2 py-2 text-sm font-medium text-gray-500 hover:text-[#C62828] underline disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Prefer to pay online instead?
             </button>

@@ -440,14 +440,27 @@ export default function POS() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {filteredMenuCatalog.map((item) => {
                       const qty = selectedMenuItems[item._id] || 0;
+                      const isTracked = !!item.trackDailyStock;
+                      const remaining = item.remaining ?? 0;
+                      const outOfStock = isTracked && remaining <= 0;
                       return (
-                        <div key={item._id} className={`border rounded-lg p-3 ${qty > 0 ? 'border-[#C62828] bg-[#FFF8F0]' : 'border-gray-200'}`}>
+                        <div key={item._id} className={`border rounded-lg p-3 ${outOfStock ? 'border-red-200 bg-red-50/40' : qty > 0 ? 'border-[#C62828] bg-[#FFF8F0]' : 'border-gray-200'}`}>
                           <p className="text-sm font-semibold text-gray-800">{item.name}</p>
-                          <p className="text-xs text-gray-500 mb-2">₦{item.price.toLocaleString()} each</p>
+                          <p className="text-xs text-gray-500 mb-1">₦{item.price.toLocaleString()} each</p>
+                          {isTracked && (
+                            <p className={`text-xs mb-2 ${outOfStock ? 'text-red-600 font-semibold' : 'text-gray-400'}`}>
+                              {outOfStock ? 'Out of stock' : `${remaining} in stock today`}
+                            </p>
+                          )}
                           <div className="flex items-center gap-2">
-                            <button type="button" onClick={() => setMenuItemQty(item._id, qty - 1)} className="w-7 h-7 flex items-center justify-center border rounded-full text-gray-500 hover:bg-gray-50"><Minus size={14} /></button>
+                            <button type="button" disabled={outOfStock} onClick={() => setMenuItemQty(item._id, qty - 1)} className="w-7 h-7 flex items-center justify-center border rounded-full text-gray-500 hover:bg-gray-50 disabled:opacity-40"><Minus size={14} /></button>
                             <span className="w-8 text-center font-semibold">{qty}</span>
-                            <button type="button" onClick={() => setMenuItemQty(item._id, qty + 1)} className="w-7 h-7 flex items-center justify-center border rounded-full text-gray-500 hover:bg-gray-50"><Plus size={14} /></button>
+                            <button
+                              type="button"
+                              disabled={outOfStock || (isTracked && qty >= remaining)}
+                              onClick={() => setMenuItemQty(item._id, Math.min(qty + 1, isTracked ? remaining : qty + 1))}
+                              className="w-7 h-7 flex items-center justify-center border rounded-full text-gray-500 hover:bg-gray-50 disabled:opacity-40"
+                            ><Plus size={14} /></button>
                           </div>
                         </div>
                       );

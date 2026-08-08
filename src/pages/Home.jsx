@@ -46,6 +46,8 @@ export default function Home() {
         description: item.description || "",
         price: Number(item.price),
         image: item.image || "https://via.placeholder.com/300x200?text=No+Image",
+        trackDailyStock: !!item.trackDailyStock,
+        remaining: item.remaining,
       })));
     } catch (err) {
       console.error("Error fetching signature dishes:", err);
@@ -289,13 +291,19 @@ export default function Home() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
               {dishes.map((dish) => {
                 const promo = getPromoDetails(dish);
+                const outOfStock = dish.trackDailyStock && (dish.remaining ?? 0) <= 0;
                 return (
                   <div key={dish.id} className="group bg-[#FFF8F0] rounded-2xl overflow-hidden shadow-md hover:shadow-xl transition-all duration-500">
                     <div className="h-56 overflow-hidden relative">
-                      <img src={dish.image} alt={dish.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                      {promo.badge && (
+                      <img src={dish.image} alt={dish.name} className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ${outOfStock ? 'grayscale opacity-60' : ''}`} />
+                      {promo.badge && !outOfStock && (
                         <span className="absolute top-3 left-3 bg-[#C62828] text-white text-xs font-bold px-2 py-1 rounded-full shadow-md">
                           {promo.badge}
+                        </span>
+                      )}
+                      {outOfStock && (
+                        <span className="absolute top-3 left-3 bg-gray-800 text-white text-xs font-bold px-2 py-1 rounded-full shadow-md uppercase tracking-wide">
+                          Out of Stock
                         </span>
                       )}
                     </div>
@@ -309,12 +317,18 @@ export default function Home() {
                             <span className="text-sm text-gray-400 line-through">{promo.originalPrice}</span>
                           )}
                         </div>
-                        <button
-                          onClick={() => addToCart(dish)}
-                          className="px-4 py-2 rounded-full bg-[#C62828] text-white text-sm font-semibold hover:bg-[#B71C1C] transition-colors"
-                        >
-                          Order Now
-                        </button>
+                        {outOfStock ? (
+                          <span className="px-4 py-2 rounded-full bg-gray-100 text-gray-500 text-sm font-semibold cursor-not-allowed">
+                            Out of Stock
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => addToCart(dish)}
+                            className="px-4 py-2 rounded-full bg-[#C62828] text-white text-sm font-semibold hover:bg-[#B71C1C] transition-colors"
+                          >
+                            Order Now
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>

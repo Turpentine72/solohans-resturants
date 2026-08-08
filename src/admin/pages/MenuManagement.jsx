@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Helmet } from 'react-helmet-async';
-import { Search, Plus, Edit, Trash2, X, Star, Upload, ChefHat } from 'lucide-react';
+import { Search, Plus, Edit, Trash2, X, Star, Upload, ChefHat, Package } from 'lucide-react';
 import { menuItems as menuItemsApi, categories as categoriesApi, ingredients as ingredientsApi, uploadFile } from '../../lib/api';
 
 export default function MenuManagement() {
@@ -20,6 +20,7 @@ export default function MenuManagement() {
     imagePreview: '',
     available: true,
     signature: false,
+    trackDailyStock: false,
     recipe: [], // [{ key, qtyPerUnit }] — powers automatic ingredient deduction
   });
   const [saving, setSaving] = useState(false);
@@ -72,6 +73,7 @@ export default function MenuManagement() {
       imagePreview: '',
       available: true,
       signature: false,
+      trackDailyStock: false,
       recipe: [],
     });
     setShowModal(true);
@@ -88,6 +90,7 @@ export default function MenuManagement() {
       imagePreview: item.image,
       available: item.available,
       signature: item.signature,
+      trackDailyStock: !!item.trackDailyStock,
       recipe: Array.isArray(item.ingredients) ? item.ingredients.map((r) => ({ key: r.key, qtyPerUnit: r.qtyPerUnit })) : [],
     });
     setShowModal(true);
@@ -167,6 +170,7 @@ export default function MenuManagement() {
       image: imageUrl,
       available: form.available,
       signature: form.signature,
+      trackDailyStock: form.trackDailyStock,
       // Generic recipe — this is what makes ingredient deduction "just work"
       // in POS/website checkout for ANY menu item, not only the hardcoded
       // Shawarma variants.
@@ -289,6 +293,13 @@ export default function MenuManagement() {
                         <ChefHat size={12} /> Has Recipe
                       </span>
                     )}
+                    {item.trackDailyStock && (
+                      <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${
+                        (item.remaining || 0) > 0 ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-red-50 text-red-700 border-red-200'
+                      }`}>
+                        <Package size={12} /> {(item.remaining || 0) > 0 ? `${item.remaining} left today` : 'Out of stock today'}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center justify-between">
                     <button onClick={() => handleOpenEdit(item)} className="flex items-center gap-1 text-blue-600 hover:bg-blue-50 px-2 py-1 rounded-lg text-sm font-medium transition-colors"><Edit size={14} /> Edit</button>
@@ -334,10 +345,14 @@ export default function MenuManagement() {
                     <input type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
                   </label>
                 </div>
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 flex-wrap">
                   <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={form.available} onChange={e => setForm({...form, available: e.target.checked})} className="w-4 h-4 rounded accent-[#C62828]" /><span className="text-sm">Available</span></label>
                   <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={form.signature} onChange={e => setForm({...form, signature: e.target.checked})} className="w-4 h-4 rounded accent-[#C62828]" /><span className="text-sm">Signature Dish</span></label>
+                  <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={form.trackDailyStock} onChange={e => setForm({...form, trackDailyStock: e.target.checked})} className="w-4 h-4 rounded accent-[#C62828]" /><span className="text-sm">Track Daily Stock (limited portions)</span></label>
                 </div>
+                {form.trackDailyStock && (
+                  <p className="text-xs text-gray-500 -mt-2">This dish will appear on the Daily Dish Stock page, where you set today's opening quantity each morning. Once it sells out for the day, it's automatically marked Out of Stock on the menu.</p>
+                )}
 
                 {/* Recipe builder — links this item to the ingredient-deduction engine */}
                 <div className="pt-2 border-t">

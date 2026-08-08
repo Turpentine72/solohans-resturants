@@ -65,6 +65,11 @@ const Menu = () => {
         category: item.category || "Uncategorized",
         categoryLower: (item.category || "uncategorized").toLowerCase(),
         available: item.available,
+        // ✅ Daily Dish Stock — only dishes opted into tracking carry a
+        // meaningful `remaining` count; everything else is always orderable
+        // (subject only to the existing `available` toggle above).
+        trackDailyStock: !!item.trackDailyStock,
+        remaining: item.remaining,
       })));
     } catch (err) {
       console.error("Error fetching dishes:", err);
@@ -224,13 +229,19 @@ const Menu = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
               {filteredDishes.map((dish) => {
                 const promo = getPromoDetails(dish);
+                const outOfStock = dish.trackDailyStock && (dish.remaining ?? 0) <= 0;
                 return (
                   <div key={dish.id} className="group bg-white rounded-2xl overflow-hidden shadow-md hover:shadow-xl transition-all duration-500">
                     <div className="h-56 overflow-hidden relative">
-                      <img src={dish.image} alt={dish.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                      {promo.badge && (
+                      <img src={dish.image} alt={dish.name} className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ${outOfStock ? 'grayscale opacity-60' : ''}`} />
+                      {promo.badge && !outOfStock && (
                         <span className="absolute top-3 left-3 bg-[#C62828] text-white text-xs font-bold px-2 py-1 rounded-full shadow-md">
                           {promo.badge}
+                        </span>
+                      )}
+                      {outOfStock && (
+                        <span className="absolute top-3 left-3 bg-gray-800 text-white text-xs font-bold px-2 py-1 rounded-full shadow-md uppercase tracking-wide">
+                          Out of Stock
                         </span>
                       )}
                     </div>
@@ -244,22 +255,31 @@ const Menu = () => {
                             <span className="text-sm text-gray-400 line-through">{promo.originalPrice}</span>
                           )}
                         </div>
-                        <div className="flex flex-col gap-3">
-                          <button
-                            onClick={() => addToCart(dish)}
-                            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-[#C62828] text-white text-sm font-semibold hover:bg-[#B71C1C] transition-colors"
-                          >
-                            <ShoppingCart size={16} />
-                            Order Now
-                          </button>
-                          <button
-                            onClick={() => { addToCart(dish); openCart('whatsapp'); }}
-                            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full border border-[#C62828] text-[#C62828] text-sm font-semibold hover:bg-[#C62828] hover:text-white transition-colors"
-                          >
-                            <Send size={16} />
-                            Order on WhatsApp
-                          </button>
-                        </div>
+                        {outOfStock ? (
+                          <div className="flex flex-col gap-2">
+                            <span className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-gray-100 text-gray-500 text-sm font-semibold cursor-not-allowed">
+                              Out of Stock — Sold Out for Today
+                            </span>
+                            <p className="text-xs text-gray-400 text-center">Check back tomorrow, or explore other dishes on the menu.</p>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-3">
+                            <button
+                              onClick={() => addToCart(dish)}
+                              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-[#C62828] text-white text-sm font-semibold hover:bg-[#B71C1C] transition-colors"
+                            >
+                              <ShoppingCart size={16} />
+                              Order Now
+                            </button>
+                            <button
+                              onClick={() => { addToCart(dish); openCart('whatsapp'); }}
+                              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full border border-[#C62828] text-[#C62828] text-sm font-semibold hover:bg-[#C62828] hover:text-white transition-colors"
+                            >
+                              <Send size={16} />
+                              Order on WhatsApp
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
